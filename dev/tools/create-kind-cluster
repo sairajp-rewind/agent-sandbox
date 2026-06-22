@@ -21,8 +21,49 @@ import tempfile
 import textwrap
 
 
-def create_kind_config(kubelet_verbosity, containerd_loglevel=None):
+def create_kind_config(kubelet_verbosity, containerd_loglevel=None, gvisor=False):
     """Create a kind config with kubelet verbosity and containerd settings."""
+    if gvisor:
+        config = textwrap.dedent(f"""\
+            kind: Cluster
+            apiVersion: kind.x-k8s.io/v1alpha4
+            containerdConfigPatches:
+            - |-
+              [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runsc]
+                runtime_type = "io.containerd.runsc.v1"
+            """)
+        if containerd_loglevel:
+            config += textwrap.dedent(f"""\
+            - |-
+              [debug]
+                level = "{containerd_loglevel}"
+            """)
+        
+        config += textwrap.dedent(f"""\
+            nodes:
+            - role: control-plane
+              extraMounts:
+              - hostPath: /usr/local/bin/runsc
+                containerPath: /usr/local/bin/runsc
+              - hostPath: /usr/local/bin/containerd-shim-runsc-v1
+                containerPath: /usr/local/bin/containerd-shim-runsc-v1
+              kubeadmConfigPatches:
+              - |
+                kind: ClusterConfiguration
+                apiServer:
+                  extraArgs:
+                    enable-admission-plugins: "NodeRestriction,OwnerReferencesPermissionEnforcement"
+              - |
+                kind: KubeletConfiguration
+                logging:
+                  verbosity: {kubelet_verbosity}
+              extraPortMappings:
+              - containerPort: 30789
+                hostPort: 30789
+                protocol: TCP
+            """)
+        return config
+
     config = textwrap.dedent(f"""\
         kind: Cluster
         apiVersion: kind.x-k8s.io/v1alpha4
@@ -58,6 +99,7 @@ def main():
                         help="Containerd log level (default: debug). Set to empty string to skip.")
     parser.add_argument("--kubelet-verbosity", type=int, default=8,
                         help="Kubelet verbosity level (requires cluster creation, not applied to existing clusters).")
+    parser.add_argument("--gvisor", action="store_true", help="Enable gVisor containerd patches and mounts.")
     args = parser.parse_args()
 
     clusters = subprocess.run(["kind", "get", "clusters"], capture_output=True, text=True).stdout.splitlines()
@@ -77,7 +119,7 @@ def main():
         create_cmd = ["kind", "create", "cluster", "--name", args.name]
 
         # Create a temporary config file with kubelet verbosity and containerd settings
-        config_content = create_kind_config(args.kubelet_verbosity, args.containerd_loglevel)
+        config_content = create_kind_config(args.kubelet_verbosity, args.containerd_loglevel, args.gvisor)
         with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
             f.write(config_content)
             config_path = f.name
