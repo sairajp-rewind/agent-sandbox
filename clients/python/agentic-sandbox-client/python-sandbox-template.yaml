@@ -13,7 +13,8 @@ spec:
       containers:
       - name: python-runtime
         # The test_client.py expects the image to be agent-sandbox/examples/python-runtime-sandbox
-        image: us-central1-docker.pkg.dev/k8s-staging-images/agent-sandbox/python-runtime-sandbox:latest-main
+        image: kind.local/sandbox-runtime:latest
+        imagePullPolicy: Never
         ports:
         - containerPort: 8888
         readinessProbe:

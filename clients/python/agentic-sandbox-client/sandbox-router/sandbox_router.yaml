@@ -38,13 +38,13 @@ spec:
               app: sandbox-router
       containers:
       - name: router
-        image: ${ROUTER_IMAGE}
-        # imagePullPolicy: Never  # Uncomment when using a locally loaded image (kind load / minikube image load)
+        image: ${SANDBOX_ROUTER_IMG}
+        imagePullPolicy: Never  # Uncomment when using a locally loaded image (kind load / minikube image load)
         env:
         - name: PROXY_TIMEOUT_SECONDS
           value: "180"
         - name: ALLOW_UNAUTHENTICATED_ROUTER
-          value: "false"
+          value: "true"
         # - name: ROUTER_AUTH_TOKEN
         #   valueFrom:
         #     secretKeyRef:

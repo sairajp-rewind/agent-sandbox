@@ -28,7 +28,7 @@ LD_FLAGS := -s -w -X $(VERSION_PKG).gitVersion=$(GIT_VERSION) \
 build:
 	go build -ldflags "$(LD_FLAGS)" -o bin/manager ./cmd/agent-sandbox-controller
 
-KIND_CLUSTER=agent-sandbox
+KIND_CLUSTER ?= agent-sandbox
 
 .PHONY: deploy-kind
 # `EXTENSIONS=true make deploy-kind` to deploy with Extensions enabled.

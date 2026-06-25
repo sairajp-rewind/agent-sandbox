@@ -2,7 +2,7 @@ apiVersion: extensions.agents.x-k8s.io/v1beta1
 kind: SandboxTemplate
 metadata:
   name: python-counter-template
-  namespace: sandbox-test
+  #namespace: sandbox-test
   labels:
     language: python
 spec:
@@ -15,8 +15,8 @@ spec:
         tenant-id: "test-tenant"
         user-id: "test-user"
     spec:
-      serviceAccountName: sandbox-test
-      runtimeClassName: gvisor
+      # serviceAccountName: sandbox-test
+      # runtimeClassName: gvisor
       containers:
       - name: my-container1
         image: python:3.10-slim
