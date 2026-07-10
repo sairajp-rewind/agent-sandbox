@@ -93,9 +93,8 @@ All unit-fake. FakeLLM records prompts so we can assert what the model actually 
 
 ### `test_pvc_preservation.py` — Group 2 (PVC)
 
-Unit mirroring test + two live tests (`@pytest.mark.live`, opt-in).
+Two live tests (`@pytest.mark.live`, opt-in). The direct `Sandbox` operatingMode round-trip below is what actually works on `main` today and covers our example's usage pattern. A separate `SandboxClaim.spec.operatingMode` mirroring test was previously listed here but has been removed — that field is planned for plan PR 1 and should ship with its own tests, not preemptively here.
 
-- `test_operating_mode_mirrored_from_sandboxclaim_to_sandbox` (unit)
 - `test_pvc_survives_pod_delete_and_respawn` (live, ported from `run-test-kind.sh`)
 - `test_pvc_survives_operating_mode_suspend_then_resume` (live)
 
@@ -214,7 +213,7 @@ Bodies written but `@pytest.mark.skip(reason=..., strict=True)` — un-skip when
 9. **Wake-on-traffic live test uses the real router.** Deploy [`sandbox-router/`](https://github.com/kubernetes-sigs/agent-sandbox/tree/main/sandbox-router) (from [PR #838](https://github.com/kubernetes-sigs/agent-sandbox/pull/838)) into the test cluster; test drives WS traffic through it against a suspended OpenClaw sandbox. The wake trigger currently uses a fake stand-in for the Lifecycle Daemon until that daemon is built (plan PR 2) — see Q10 below.
 10. **Density & performance ship as ClusterLoader2 recipes**, not pytest tests. Recipes live under this example's own `tests/loadtest/` subfolder (`openclaw-density-test.yaml`, `openclaw-throughput-test.yaml`, matching driver scripts, plus a `templates/` subdir). The shared [`dev/load-test/`](https://github.com/kubernetes-sigs/agent-sandbox/tree/main/dev/load-test) directory is the *reference* for how ClusterLoader2 is invoked in this repo — we borrow conventions from it but don't add OpenClaw-specific recipes there. Invocation matches the existing flow — `./clusterloader2 --testconfig=... --provider=gke|kind`.
 11. **E2E porting is planned as a follow-up stage.** The pytest scenarios in this PR are structured so their invariants can be lifted into a Go-based e2e harness later, following the [`dev/load-test/`](https://github.com/kubernetes-sigs/agent-sandbox/tree/main/dev/load-test) style. No e2e harness in this PR.
-12. **Not in this PR.** Live-harness `scenarios.py` (Markdown report artifact) + full Group 4 coverage (needs `/v1/cron/next`) + live-side idleness tests (needs `/v1/health/idle`) + E2E port + external-DB tests. This PR ships: scaffolding + Group 7 (bootstrap, unit-fake + one live variant) + Group 1 (memory, all unit-fake) + Group 2 (PVC, one unit mirroring test + two live tests) + Group 3 (snapshot, all live via `PodSnapshotSandboxClient`) + Group 5 (idleness, unit-fake only) + Group 6 (connections, three unit-fake tests + two live tests, one of which is wake-on-traffic through the real router) + Group 8 (two ClusterLoader2 recipes + shell driver scripts) + skip-stubs for Group 4.
+12. **Not in this PR.** Live-harness `scenarios.py` (Markdown report artifact) + full Group 4 coverage (needs `/v1/cron/next`) + live-side idleness tests (needs `/v1/health/idle`) + `SandboxClaim` mirroring (belongs with plan PR 1) + E2E port + external-DB tests. This PR ships: scaffolding + Group 7 (bootstrap, unit-fake + one live variant) + Group 1 (memory, all unit-fake) + Group 2 (PVC, two live tests) + Group 3 (snapshot, all live via `PodSnapshotSandboxClient`) + Group 5 (idleness, unit-fake only) + Group 6 (connections, three unit-fake tests + two live tests, one of which is wake-on-traffic through the real router) + Group 8 (two ClusterLoader2 recipes + shell driver scripts) + skip-stubs for Group 4.
 
 ## Open questions for the reviewer
 
