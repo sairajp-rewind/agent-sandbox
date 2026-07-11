@@ -13,6 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# See the tests/ directory for the fuller Python test suite; this script is the minimal shell smoke path.
+
 set -euo pipefail
 
 KIND_CLUSTER_NAME="${KIND_CLUSTER_NAME:-agent-sandbox}"

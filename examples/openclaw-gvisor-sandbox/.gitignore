@@ -1,0 +1,8 @@
+# examples/openclaw-gvisor-sandbox/.gitignore
+__pycache__/
+*.egg-info/
+*.pyc
+build/
+dist/
+.pytest_cache/
+.venv/

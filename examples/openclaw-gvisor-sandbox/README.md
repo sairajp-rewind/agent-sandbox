@@ -255,3 +255,7 @@ Do not put `volumeClaimTemplates` on the `SandboxClaim`. A claim containing its 
 - **SSH access is in the container but not exposed.** sshd runs inside the pod
   but the Services only forward 18789. Add a second port to the Service if you
   need SSH from outside.
+
+## Tests
+
+For details on the Python test suite, unit/contract testing, and live cluster tests, see the [tests README](tests/README.md).
