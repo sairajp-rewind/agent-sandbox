@@ -89,9 +89,9 @@ def canary_read(pod: str, path: str, namespace: str = "default") -> str:
 
 
 def require_paired_json(pod: str, namespace: str = "default") -> None:
-    """Check if /root/.openclaw/devices/paired.json exists in target pod; skip if absent per § 1a."""
+    """Check if /workspace/.openclaw/devices/paired.json exists in target pod; skip if absent per § 1a."""
     try:
-        kubectl_exec(pod, ["test", "-f", "/root/.openclaw/devices/paired.json"], namespace=namespace)
+        kubectl_exec(pod, ["test", "-f", "/workspace/.openclaw/devices/paired.json"], namespace=namespace)
     except subprocess.CalledProcessError:
         pytest.skip(
             "paired.json not found in pod: seeding mechanism is deferred per plan.md § 1a. "
