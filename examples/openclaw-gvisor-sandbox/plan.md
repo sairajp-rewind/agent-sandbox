@@ -45,12 +45,14 @@ Source-of-truth for anything not covered above: [`TESTS_PROPOSAL.md`](TESTS_PROP
 
 Three related "how does test-only state get into or reach the pod, without modifying shipped manifests?" problems. Bundled here because they share the same design space; resolving one likely shapes the others.
 
-### A. `/root/.openclaw/devices/paired.json` seeding
+### A. `/workspace/.openclaw/devices/paired.json` seeding
 
 OpenClaw reads `paired.json` at process start. Options considered; none locked:
 - (a) `kubectl exec ... tee` after pod boot, then delete-and-await-recreate. Requires restart orchestration.
 - (b) Test-only template variant at `tests/manifests/openclaw-template-test.yaml` with an added init-container writing paired.json. Live tests apply this variant instead of the shipped template.
 - (c) Extend the shipped `openclaw-template.yaml` with a conditional init-container that no-ops unless a test ConfigMap exists. Touches the shipped example.
+
+**Note on uid 1000 (post-hardening, commit `4872f65`):** the container runs as `runAsUser: 1000` with `fsGroup: 1000`, so any seeding path must write as uid 1000 (or a group covered by fsGroup=1000). `kubectl exec` runs as uid 1000 by default and PVC writes succeed via fsGroup, but `/workspace/.openclaw/devices/` may need `mkdir -p` first. An init-container in a test-only template variant must also declare `runAsUser: 1000, runAsGroup: 1000, capabilities.drop: [ALL]` to match the main container's security context.
 
 ### B. `openclaw.json` override for `FakeLLM` provider block
 
@@ -329,7 +331,7 @@ Functions to include:
 - `kubectl_delete(path: str, namespace: str = "default", ignore_missing: bool = True) -> None`.
 - `canary_write(pod: str, path: str, value: str)` — kubectl-exec-based, matches the pattern in `run-test-kind.sh` lines 129-132.
 - `canary_read(pod: str, path: str) -> str`.
-- `require_paired_json(pod: str) -> None` — checks whether `/root/.openclaw/devices/paired.json` exists in the target pod; calls `pytest.skip(...)` with a message pointing to § 1a.A if absent. (When § 1a.A is resolved, replace this with the actual seeding function.)
+- `require_paired_json(pod: str) -> None` — checks whether `/workspace/.openclaw/devices/paired.json` exists in the target pod; calls `pytest.skip(...)` with a message pointing to § 1a.A if absent. (When § 1a.A is resolved, replace this with the actual seeding function.)
 - `require_fakellm_config(pod: str) -> None` — checks whether the pod's `/etc/openclaw/openclaw.json` contains a `models.providers.fakellm` block; skips with a reason pointing to § 1a.B if not. (When § 1a.B is resolved, replace with an actual override-application function.)
 - `require_fakellm_reachable_from_pod(pod: str, base_url: str) -> None` — `kubectl exec`s a one-shot `curl` inside the pod against `base_url`; skips with a reason pointing to § 1a.C if unreachable. (When § 1a.C is resolved, this becomes a no-op or is removed.)
 - `nodeport_url(port: int = 30789) -> str` — returns the URL for reaching the OpenClaw gateway via its NodePort. `kind` returns `http://127.0.0.1:30789` (matches [`kind-service.yaml`](kind-service.yaml)); on GKE the tester is expected to have an IAP tunnel mapping `localhost:18789` to the NodePort (see `README.md` § "On GKE"), and the helper reads `OPENCLAW_TEST_GATEWAY_URL` env var if set to override. Live tests that hit the real gateway MUST use this helper — never `kubectl port-forward`, which is broken under gVisor.
@@ -363,7 +365,7 @@ For each test file below: create it in `tests/`, use plain pytest functions (no 
 
 - `test_short_term_memory_survives_within_single_session_live` — send turn A ("my name is Alice"), send turn B ("what's my name?"), assert `fake_llm.last_prompt()` contains "Alice".
 - `test_short_term_memory_lost_after_pvc_suspend_live` — send A, patch `operatingMode=Suspended`, wait pod gone, patch back to `Running`, wait ready, send B, assert prompt does NOT contain A's content.
-- `test_long_term_memory_written_to_disk_on_remember_intent_live` — send "please remember X", `kubectl exec` into the pod to verify a file appears under `/root/.openclaw/memory/<agentId>.sqlite` with X.
+- `test_long_term_memory_written_to_disk_on_remember_intent_live` — send "please remember X", `kubectl exec` into the pod to verify a file appears under `/workspace/.openclaw/memory/<agentId>.sqlite` with X.
 - `test_long_term_memory_survives_pvc_suspend_live` — write LTM, suspend/resume cycle, send query, assert `fake_llm.last_prompt()` includes the LTM content.
 - `test_relevant_ltm_entries_injected_into_prompt_live` — seed 3 LTM entries via chat, ask about entry #2, assert `fake_llm.last_prompt()` includes entry #2's content and (optionally) not the others.
 
@@ -565,6 +567,7 @@ Flag these in the PR body so the reviewer can push back if needed:
 4. **Wake-on-traffic uses a ~30-line test-side HTTP handler** as stand-in for the missing Lifecycle Daemon (Option a from proposal Q10). Same `FakeLifecycleDaemon` class; live mode of that class patches real K8s. Replaced entirely by the real daemon when plan PR 2 lands.
 5. **Group 3 auto-skips on kind** — session fixture inspects the cluster for Pod Snapshot CRDs and skips (not fails) when absent.
 6. **Timing headroom** — every timing assertion (`test_gateway_root_responds_within_deadline`, idle-transition tests) uses 3-10× headroom over expected values to avoid CI flakes. Documented as comments in the tests themselves.
+7. **Template runs non-root as of commit `4872f65`** (`runAsUser: 1000`, `runAsGroup: 1000`, `fsGroup: 1000`, `runAsNonRoot: true`, `capabilities.drop: [ALL]` on both init and main containers; `HOME=/workspace`; PVC mounted at `/workspace/.openclaw` instead of `/root/.openclaw`). Test-side `kubectl exec` commands run as uid 1000 by default and PVC writes work via fsGroup=1000. Tests do not assume root and do not require the container to be started with elevated privileges. sshd (formerly on port 18790) was also removed by that commit — the port declaration is stale in the shipped template but not exercised by any test.
 
 ---
 
@@ -592,6 +595,7 @@ Flag these in the PR body so the reviewer can push back if needed:
 - **"live test hangs trying to reach the gateway":** you probably used `kubectl port-forward`. Broken under gVisor. Use `nodeport_url()` from `_helpers.py` — hits `http://127.0.0.1:30789` on kind (per [`kind-service.yaml`](kind-service.yaml)) or your IAP-tunneled port on GKE.
 - **"pod can't reach FakeLLM":** § 1a.C in action. `FakeLLM`'s `127.0.0.1` is the test host, not the pod's loopback. On kind + Docker Desktop use `host.docker.internal`; on Linux kind the docker bridge gateway; on GKE this doesn't work at all without a tunnel. `require_fakellm_reachable_from_pod` checks this and skips clearly.
 - **"port conflicts in parallel test runs":** every fake binds `127.0.0.1:0` (kernel-assigned); if you see a fixed-port collision, someone hardcoded a port instead of letting the kernel pick and capturing it back into `fake.base_url`.
+- **"permission denied writing to /workspace/.openclaw/…":** you assumed uid 0. Container runs as uid 1000 (commit `4872f65`). PVC allows uid 1000 writes via fsGroup=1000, but the target directory may need `mkdir -p` first — `kubectl exec POD -- mkdir -p /workspace/.openclaw/devices` before the write.
 
 ---
 

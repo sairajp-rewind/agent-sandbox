@@ -187,7 +187,7 @@ Bodies written but `@pytest.mark.skip(reason=..., strict=True)` — un-skip when
    }
    ```
    API-key validation is a "non-empty string" check only ([`src/plugins/provider-auth-input.ts:52-53`](https://github.com/openclaw/openclaw/blob/v2026.3.23/src/plugins/provider-auth-input.ts#L52-L53)), so `sk-test-nonempty` passes. A local aiohttp server speaking OpenAI-completions is enough to fake the whole LLM path deterministically and record every prompt.
-6. **Automated auth via file seeding.** Since OpenClaw has no `--disable-pairing` flag, tests will pre-seed `/root/.openclaw/devices/paired.json` before the pod boots, using the `PairedDevice` schema from [`src/infra/device-pairing.ts`](https://github.com/openclaw/openclaw/blob/v2026.3.23/src/infra/device-pairing.ts#L59-L74):
+6. **Automated auth via file seeding.** Since OpenClaw has no `--disable-pairing` flag, tests will pre-seed `/workspace/.openclaw/devices/paired.json` before the pod boots, using the `PairedDevice` schema from [`src/infra/device-pairing.ts`](https://github.com/openclaw/openclaw/blob/v2026.3.23/src/infra/device-pairing.ts#L59-L74). (Template hardened in commit `4872f65` — runs as uid 1000, capabilities dropped, `HOME=/workspace`; PVC mount moved from `/root/.openclaw` to `/workspace/.openclaw`. Any seeding mechanism must write as uid 1000 / fsGroup=1000.):
    ```ts
    export type PairedDevice = {
      deviceId: string;
