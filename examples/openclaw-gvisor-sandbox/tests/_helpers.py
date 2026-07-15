@@ -132,6 +132,40 @@ def nodeport_url(port: int = 30789) -> str:
     return f"http://127.0.0.1:{port}"
 
 
+def get_openclaw_pod_name(claim_name: str = "openclaw-sandbox-claim", namespace: str = "default") -> str:
+    """Resolve backing pod name for an OpenClaw SandboxClaim; skip if unresolvable."""
+    try:
+        res = subprocess.run(
+            ["kubectl", "get", "sandboxclaim", claim_name, "-n", namespace, "-o", "jsonpath={.status.sandbox.name}"],
+            text=True,
+            capture_output=True,
+            timeout=10,
+        )
+    except subprocess.TimeoutExpired:
+        pytest.skip(f"kubectl get sandboxclaim {claim_name} timed out")
+    except Exception as e:
+        pytest.skip(f"kubectl get sandboxclaim {claim_name} failed: {e}")
+
+    sandbox_name = res.stdout.strip()
+    if not sandbox_name:
+        pytest.skip(f"SandboxClaim {claim_name} not found or has no sandbox assigned — no cluster context?")
+
+    try:
+        res = subprocess.run(
+            ["kubectl", "get", "sandbox", sandbox_name, "-n", namespace, "-o", "jsonpath={.metadata.annotations.agents\\.x-k8s\\.io/pod-name}"],
+            text=True,
+            capture_output=True,
+            timeout=10,
+        )
+    except subprocess.TimeoutExpired:
+        pytest.skip(f"kubectl get sandbox {sandbox_name} timed out")
+    except Exception as e:
+        pytest.skip(f"kubectl get sandbox {sandbox_name} failed: {e}")
+
+    pod_name = res.stdout.strip()
+    return pod_name if pod_name else sandbox_name
+
+
 def fake_llm_provider_block(base_url: str, model_id: str = "fake-claude") -> Dict[str, Any]:
     """Return an openclaw.json provider block pointing at FakeLLM."""
     return {

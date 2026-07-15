@@ -279,6 +279,7 @@ class FakeLifecycleDaemon:
         self._lock = threading.Lock()
         self.base_url: str = ""
         self.max_idle_seconds: float = 0.0
+        self._polling_task: Optional[asyncio.Task] = None
 
         self.aiohttp_app = aiohttp.web.Application()
         self.aiohttp_app.router.add_post("/v1/sandbox/suspend", self._handle_suspend)
@@ -288,6 +289,68 @@ class FakeLifecycleDaemon:
     def __repr__(self) -> str:
         mode = "live" if self.k8s_client else "unit"
         return f"<FakeLifecycleDaemon mode={mode} patches={len(self.patch_log)}>"
+
+    async def start_polling(
+        self,
+        openclaw_url: str,
+        sandbox_name: str = "test-sandbox",
+        namespace: str = "default",
+        interval: float = 0.05,
+    ) -> None:
+        """Start background task polling openclaw /v1/health/idle to auto-trigger suspend."""
+        if self._polling_task is not None:
+            self._polling_task.cancel()
+        self._polling_task = asyncio.create_task(
+            self._poll_loop(openclaw_url, sandbox_name, namespace, interval)
+        )
+
+    async def stop_polling(self) -> None:
+        if self._polling_task is not None:
+            self._polling_task.cancel()
+            try:
+                await self._polling_task
+            except asyncio.CancelledError:
+                pass
+            self._polling_task = None
+
+    async def _poll_loop(
+        self,
+        openclaw_url: str,
+        sandbox_name: str,
+        namespace: str,
+        interval: float,
+    ) -> None:
+        idle_since: Optional[float] = None
+        async with aiohttp.ClientSession() as session:
+            while True:
+                try:
+                    async with session.get(openclaw_url + "/v1/health/idle") as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            if data.get("idle", False):
+                                if idle_since is None:
+                                    idle_since = time.time()
+                                elif (time.time() - idle_since) >= self.max_idle_seconds:
+                                    with self._lock:
+                                        if self.scripted_status["operatingMode"] != "Suspended":
+                                            self.patch_log.append(
+                                                {"name": sandbox_name, "namespace": namespace, "op": "suspend"}
+                                            )
+                                            self.scripted_status["operatingMode"] = "Suspended"
+                                            if self.k8s_client:
+                                                self.k8s_client.patch_namespaced_custom_object(
+                                                    group="agents.x-k8s.io",
+                                                    version="v1beta1",
+                                                    plural="sandboxes",
+                                                    namespace=namespace,
+                                                    name=sandbox_name,
+                                                    body={"spec": {"operatingMode": "Suspended"}},
+                                                )
+                            else:
+                                idle_since = None
+                except Exception:
+                    pass
+                await asyncio.sleep(interval)
 
     async def _handle_suspend(self, request: aiohttp.web.Request) -> aiohttp.web.Response:
         data = await request.json()
@@ -330,7 +393,9 @@ class FakeLifecycleDaemon:
             return aiohttp.web.json_response(dict(self.scripted_status))
 
     def assert_no_leaks(self) -> None:
-        pass
+        if self._polling_task is not None:
+            self._polling_task.cancel()
+            self._polling_task = None
 
 
 class FakeSandboxRouter:
@@ -448,6 +513,7 @@ async def fake_daemon():
     app.base_url = f"http://127.0.0.1:{port}"
     _ACTIVE_FAKES.append(app)
     yield app
+    await app.stop_polling()
     await runner.cleanup()
 
 
@@ -459,9 +525,11 @@ def fake_router():
 
 
 @pytest.fixture(autouse=True)
-def _leak_check():
+async def _leak_check():
     yield
     for f in _ACTIVE_FAKES:
+        if hasattr(f, "stop_polling"):
+            await f.stop_polling()
         f.assert_no_leaks()
     _ACTIVE_FAKES.clear()
 
