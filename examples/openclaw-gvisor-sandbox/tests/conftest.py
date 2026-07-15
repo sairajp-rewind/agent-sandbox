@@ -566,3 +566,37 @@ async def _leak_check():
 def kube_client():
     k8s_config.load_kube_config()
     return k8s_client_mod.ApiClient()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _apply_openclaw_manifests(request):
+    """Apply example manifests before live tests, delete after unless OPENCLAW_TEST_KEEP_MANIFESTS=1."""
+    m_opt = request.config.getoption("-m", "").strip()
+    if m_opt not in ("live", "live or not live"):
+        yield
+        return
+
+    if os.environ.get("OPENCLAW_TEST_KEEP_MANIFESTS") == "1":
+        yield
+        return
+
+    from _helpers import kubectl_apply, kubectl_delete, get_openclaw_pod_name, wait_until
+
+    example_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    manifests = ["openclaw-config.yaml", "openclaw-template.yaml", "openclaw-warmpool.yaml", "openclaw-claim.yaml"]
+
+    for name in manifests:
+        kubectl_apply(os.path.join(example_dir, name))
+
+    def _claim_ready():
+        try:
+            get_openclaw_pod_name()
+            return True
+        except Exception:
+            return False
+
+    wait_until(_claim_ready, timeout=180, interval=2.0)
+    yield
+
+    for name in reversed(manifests):
+        kubectl_delete(os.path.join(example_dir, name), ignore_missing=True)

@@ -14,7 +14,6 @@
 
 """Group 2 tests: PVC state preservation across pod deletes and suspend/resume cycles."""
 
-import os
 import uuid
 import pytest
 import subprocess
@@ -24,38 +23,9 @@ from _helpers import (
     get_openclaw_pod_name,
     wait_until,
     kubectl_exec,
-    kubectl_apply,
-    kubectl_delete,
 )
 
 pytestmark = pytest.mark.live
-
-
-@pytest.fixture(scope="module", autouse=True)
-def _apply_openclaw_manifests():
-    """Apply example manifests before tests, delete after unless OPENCLAW_TEST_KEEP_MANIFESTS=1."""
-    if os.environ.get("OPENCLAW_TEST_KEEP_MANIFESTS") == "1":
-        yield
-        return
-
-    example_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-    manifests = ["openclaw-config.yaml", "openclaw-template.yaml", "openclaw-warmpool.yaml", "openclaw-claim.yaml"]
-
-    for name in manifests:
-        kubectl_apply(os.path.join(example_dir, name))
-
-    def _claim_ready():
-        try:
-            get_openclaw_pod_name()
-            return True
-        except Exception:
-            return False
-
-    wait_until(_claim_ready, timeout=180, interval=2.0)
-    yield
-
-    for name in reversed(manifests):
-        kubectl_delete(os.path.join(example_dir, name), ignore_missing=True)
 
 
 def test_pvc_survives_pod_delete_and_respawn():
