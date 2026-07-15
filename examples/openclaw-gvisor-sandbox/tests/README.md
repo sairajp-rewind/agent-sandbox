@@ -4,12 +4,14 @@ This directory contains the test suite for the OpenClaw + Agent Sandbox integrat
 
 ## Setup
 
-Create a virtual environment and install the package with test dependencies:
+Requires Python >= 3.10.
+
+Create a virtual environment and install test dependencies:
 
 ```bash
 cd examples/openclaw-gvisor-sandbox
 python3 -m venv .venv && source .venv/bin/activate
-pip install -e ".[test]"
+pip install -r requirements-test.txt
 ```
 
 ## Running Tests

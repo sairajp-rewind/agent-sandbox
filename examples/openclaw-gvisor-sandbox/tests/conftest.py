@@ -16,6 +16,7 @@
 
 import asyncio
 import os
+import sys
 import threading
 import time
 from typing import Any, Callable, Dict, List, Optional
@@ -26,6 +27,19 @@ import aiohttp.web
 import pytest
 from kubernetes import client as k8s_client_mod
 from kubernetes import config as k8s_config
+
+_MIN_PY = (3, 10)
+
+
+def pytest_configure(config):
+    if sys.version_info < _MIN_PY:
+        pytest.exit(
+            f"openclaw-sandbox-tests requires Python >= "
+            f"{_MIN_PY[0]}.{_MIN_PY[1]} (running "
+            f"{sys.version_info.major}.{sys.version_info.minor}). "
+            f"See tests/README.md.",
+            returncode=1,
+        )
 
 
 class FakeSandbox:
@@ -180,6 +194,20 @@ class FakeOpenClaw:
         self.aiohttp_app.router.add_get(
             "/api/v1/lifecycle/status", self._handle_idle
         )
+        self.aiohttp_app.router.add_get("/ws", self._handle_ws)
+
+    async def _handle_ws(self, request: aiohttp.web.Request) -> aiohttp.web.WebSocketResponse:
+        ws = aiohttp.web.WebSocketResponse()
+        await ws.prepare(request)
+        with self._lock:
+            self.pending_replies += 1
+        try:
+            async for msg in ws:
+                pass
+        finally:
+            with self._lock:
+                self.pending_replies = max(0, self.pending_replies - 1)
+        return ws
 
     def __repr__(self) -> str:
         return f"<FakeOpenClaw base_url={self.base_url} pending={self.pending_count}>"
