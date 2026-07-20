@@ -16,24 +16,6 @@ spec:
         runAsGroup: 1000
         fsGroup: 1000
         runAsNonRoot: true
-      initContainers:
-        - name: init-config
-          image: ghcr.io/openclaw/openclaw:2026.3.23
-          securityContext:
-            runAsUser: 1000
-            runAsGroup: 1000
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop: ["ALL"]
-          command:
-            - sh
-            - -c
-            - cp /etc/openclaw-readonly/openclaw.json /etc/openclaw/openclaw.json
-          volumeMounts:
-            - name: cm-volume
-              mountPath: /etc/openclaw-readonly
-            - name: openclaw-etc-writable
-              mountPath: /etc/openclaw
       containers:
         - name: openclaw
           image: ghcr.io/openclaw/openclaw:2026.3.23
@@ -65,6 +47,9 @@ spec:
             - sh
             - -c
             - |
+              if [ ! -f /etc/openclaw/openclaw.json ]; then
+                cp /etc/openclaw-readonly/openclaw.json /etc/openclaw/openclaw.json
+              fi
               node dist/index.js gateway --bind=lan --port 18789 --allow-unconfigured --verbose
           ports:
             - containerPort: 18789
@@ -74,6 +59,8 @@ spec:
               name: workspaces-pvc
             - mountPath: /etc/openclaw
               name: openclaw-etc-writable
+            - mountPath: /etc/openclaw-readonly
+              name: cm-volume
             - mountPath: /workspace
               name: home-dir
       volumes:
