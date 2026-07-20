@@ -1,0 +1,17 @@
+apiVersion: podsnapshot.gke.io/v1
+kind: PodSnapshotPolicy
+metadata:
+  name: example-psp-workload
+spec:
+  storageConfigName: example-pod-snapshot-storage-config
+  selector:
+    matchLabels:
+      sandbox: openclaw-template-sandbox
+  triggerConfig:
+    type: manual
+    postCheckpoint: resume
+  snapshotGroupingRules:
+    groupByLabelValue:
+      labels: ["agents.x-k8s.io/sandbox-name-hash"]
+      groupRetentionPolicy:
+        maxSnapshotCountPerGroup: 3

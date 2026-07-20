@@ -1,0 +1,88 @@
+# sandbox-router: single-replica POC deployment of the Python router at
+# clients/python/agentic-sandbox-client/sandbox-router/. We're on the Python
+# router instead of the Go one at /sandbox-router/ because the Go router
+# hardcodes Origin stripping on WebSocket upgrades (proxy/proxy.go:207) as
+# a CSRF defense — which OpenClaw treats as "origin missing" and rejects
+# with code=1008 origin-mismatch. The Python router forwards Origin
+# unchanged (WEBSOCKET_HANDSHAKE_HEADERS in sandbox_router.py excludes only
+# sec-websocket-* headers), which lets a tight `allowedOrigins` list on
+# OpenClaw actually match the browser's Origin.
+#
+# Contract-compatible: same `sandbox-router-svc` Service, same X-Sandbox-*
+# headers, same DNS form <X-Sandbox-ID>.<X-Sandbox-Namespace>.svc.<cluster-domain>:<X-Sandbox-Port>.
+#
+# Differences vs. upstream sandbox_router.yaml:
+# - replicas: 1                       (POC only; no HA needed)
+# - image: sandbox-router:poc         (locally built + `kind load`ed —
+#                                      Python router has no published image)
+# - imagePullPolicy: Never            (image only exists in kind's containerd)
+# - ALLOW_UNAUTHENTICATED_ROUTER=true (POC only; matches plan's q4 answer)
+apiVersion: v1
+kind: Service
+metadata:
+  name: sandbox-router-svc
+spec:
+  type: ClusterIP
+  selector:
+    app: sandbox-router
+  ports:
+  - name: http
+    protocol: TCP
+    port: 8080
+    targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sandbox-router
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sandbox-router
+  template:
+    metadata:
+      labels:
+        app: sandbox-router
+    spec:
+      containers:
+      - name: router
+        image: sandbox-router:poc
+        imagePullPolicy: Never
+        env:
+        - name: PROXY_TIMEOUT_SECONDS
+          value: "180"
+        - name: WEBSOCKET_IDLE_TIMEOUT_SECONDS
+          value: "3600"
+        - name: WEBSOCKET_MAX_LIFETIME_SECONDS
+          value: "86400"
+        - name: WEBSOCKET_MAX_MESSAGE_BYTES
+          value: "16777216"
+        - name: WEBSOCKET_MAX_CONNECTIONS_PER_CLIENT
+          value: "0"
+        - name: ALLOW_UNAUTHENTICATED_ROUTER
+          value: "true"
+        ports:
+        - containerPort: 8080
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        resources:
+          requests:
+            cpu: "250m"
+            memory: "512Mi"
+          limits:
+            cpu: "1000m"
+            memory: "1Gi"
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000

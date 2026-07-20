@@ -1,0 +1,150 @@
+# Tenant A: ConfigMap + SandboxTemplate + SandboxWarmPool + SandboxClaim + Service.
+#
+# The Service is named exactly "tenant-a" because the sandbox-router resolves
+# X-Sandbox-ID -> <sandbox-id>.<namespace>.svc.<cluster-domain>. Sending
+# `X-Sandbox-ID: tenant-a` routes to this Service, which selects the adopted
+# pod via the `sandbox.users.io/tenant: tenant-a` label injected by the claim
+# controller (additionalPodMetadata is applied at adoption, so warm-pool
+# replenishment pods are not selected).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: openclaw-config-a
+data:
+  # Origins the browser will send when accessing OpenClaw through the router.
+  # The Python router (used here — see router.yaml) forwards Origin unchanged
+  # on WebSocket upgrades, so the browser's `http://localhost:8080` flows
+  # through and OpenClaw can match it against this list. If you change the
+  # router's local port-forward from 8080 to something else, update both
+  # entries here.
+  openclaw.json: |
+    {
+      "gateway": {
+        "controlUi": {
+          "allowedOrigins": [
+              "http://localhost:8080",
+              "http://127.0.0.1:8080"
+            ]
+        }
+      }
+    }
+---
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxTemplate
+metadata:
+  name: openclaw-template-a
+spec:
+  podTemplate:
+    metadata:
+      labels:
+        sandbox: openclaw-template-a-sandbox
+    spec:
+      runtimeClassName: gvisor
+      dnsPolicy: ClusterFirst
+      automountServiceAccountToken: false
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        runAsNonRoot: true
+      initContainers:
+        - name: init-config
+          image: ghcr.io/openclaw/openclaw:2026.3.23
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          command:
+            - sh
+            - -c
+            - cp /etc/openclaw-readonly/openclaw.json /etc/openclaw/openclaw.json
+          volumeMounts:
+            - name: cm-volume
+              mountPath: /etc/openclaw-readonly
+            - name: openclaw-etc-writable
+              mountPath: /etc/openclaw
+      containers:
+        - name: openclaw
+          image: ghcr.io/openclaw/openclaw:2026.3.23
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            runAsNonRoot: true
+            capabilities:
+              drop:
+                - ALL
+          env:
+            - name: OPENCLAW_GATEWAY_TOKEN
+              value: "dummy-token-tenant-a"
+            - name: OPENCLAW_CONFIG_PATH
+              value: "/etc/openclaw/openclaw.json"
+            - name: HOME
+              value: "/workspace"
+          command:
+            - sh
+            - -c
+            - |
+              node dist/index.js gateway --bind=lan --port 18789 --allow-unconfigured --verbose
+          ports:
+            - containerPort: 18789
+            - containerPort: 18790
+          volumeMounts:
+            - mountPath: /workspace/.openclaw
+              name: workspaces-pvc
+            - mountPath: /etc/openclaw
+              name: openclaw-etc-writable
+            - mountPath: /workspace
+              name: home-dir
+      volumes:
+        - name: cm-volume
+          configMap:
+            name: openclaw-config-a
+        - name: openclaw-etc-writable
+          emptyDir: {}
+        - name: home-dir
+          emptyDir: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: workspaces-pvc
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 2Gi
+---
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxWarmPool
+metadata:
+  name: openclaw-warmpool-a
+spec:
+  replicas: 1
+  sandboxTemplateRef:
+    name: openclaw-template-a
+---
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxClaim
+metadata:
+  name: openclaw-claim-a
+spec:
+  warmPoolRef:
+    name: openclaw-warmpool-a
+  additionalPodMetadata:
+    labels:
+      sandbox.users.io/tenant: tenant-a
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tenant-a
+spec:
+  type: ClusterIP
+  selector:
+    sandbox.users.io/tenant: tenant-a
+  ports:
+    - name: gateway
+      port: 18789
+      targetPort: 18789
