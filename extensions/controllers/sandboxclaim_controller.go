@@ -32,6 +32,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/tools/events"
@@ -87,6 +88,7 @@ var errAdoptionTriggeredRetry = errors.New("triggered adoption completion, retry
 const adoptionCacheLagRequeueDelay = 50 * time.Millisecond
 
 var restrictedDomains = []string{"kubernetes.io", "k8s.io", "agents.x-k8s.io"}
+var exemptedMetadataKeys = []string{autoscalerSafeToEvictAnnotation}
 
 var ErrCrossNamespaceAdoption = errors.New("cross-namespace adoption forbidden")
 
@@ -1009,8 +1011,8 @@ func (r *SandboxClaimReconciler) completeAdoption(ctx context.Context, claim *ex
 	// Remove the warm pool's default eviction annotation so the adopted sandbox
 	// is protected from autoscaler scale-downs now that it hosts active state.
 	// Custom template-specified overrides (e.g. "false") are explicitly kept.
-	if adopted.Spec.PodTemplate.ObjectMeta.Annotations != nil && adopted.Spec.PodTemplate.ObjectMeta.Annotations[warmPoolEvictionAnnotation] == "true" {
-		delete(adopted.Spec.PodTemplate.ObjectMeta.Annotations, warmPoolEvictionAnnotation)
+	if adopted.Spec.PodTemplate.ObjectMeta.Annotations != nil && adopted.Spec.PodTemplate.ObjectMeta.Annotations[autoscalerSafeToEvictAnnotation] == "true" {
+		delete(adopted.Spec.PodTemplate.ObjectMeta.Annotations, autoscalerSafeToEvictAnnotation)
 	}
 
 	// Transfer ownership from SandboxWarmPool to SandboxClaim
@@ -1161,7 +1163,9 @@ func (r *SandboxClaimReconciler) validateAdditionalPodMetadata(claimMeta *v1beta
 		} else {
 			// For annotations, we use the blocklist
 			if isRestrictedDomain(domain) {
-				return fmt.Errorf("restricted system domain: %q is not allowed in AdditionalPodMetadata", key)
+				if !slices.Contains(exemptedMetadataKeys, key) {
+					return fmt.Errorf("restricted system domain: %q is not allowed in AdditionalPodMetadata", key)
+				}
 			}
 		}
 
@@ -2069,7 +2073,15 @@ func isAdoptable(candidate *v1beta1.Sandbox) error {
 	if controllerRef == nil {
 		return fmt.Errorf("sandbox %s/%s is unowned and cannot be safely adopted", candidate.Namespace, candidate.Name)
 	}
-	if controllerRef.APIVersion != extensionsv1beta1.GroupVersion.String() || controllerRef.Kind != "SandboxWarmPool" {
+	// Owner references keep the apiVersion that was current when they were
+	// written and are not rewritten by storage migration, so warm sandboxes
+	// created by a pre-v1beta1 pool controller still carry the v1alpha1
+	// group version after an upgrade. Match on group+kind, not version.
+	refGV, err := schema.ParseGroupVersion(controllerRef.APIVersion)
+	if err != nil {
+		return fmt.Errorf("parsing owner reference apiVersion %q of sandbox %s/%s: %w", controllerRef.APIVersion, candidate.Namespace, candidate.Name, err)
+	}
+	if refGV.Group != extensionsv1beta1.GroupVersion.Group || controllerRef.Kind != "SandboxWarmPool" {
 		return fmt.Errorf("sandbox %s/%s is not managed by warm pool. Controller: %v", candidate.Namespace, candidate.Name, controllerRef)
 	}
 	return nil

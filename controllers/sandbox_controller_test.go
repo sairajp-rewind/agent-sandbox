@@ -17,6 +17,8 @@ package controllers
 import (
 	"context"
 	"errors"
+	"fmt"
+	"math/rand/v2"
 	"testing"
 	"time"
 
@@ -1858,6 +1860,71 @@ func TestReconcilePod(t *testing.T) {
 					Name:      sandboxName,
 					Namespace: sandboxNs,
 					UID:       sandboxUID,
+				},
+				Spec: sandboxv1beta1.SandboxSpec{SandboxBlueprint: sandboxv1beta1.SandboxBlueprint{PodTemplate: sandboxv1beta1.PodTemplate{
+					Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "test-container"}}},
+					ObjectMeta: sandboxv1beta1.PodMetadata{Labels: map[string]string{"custom-label": "label-val"}},
+				}}, OperatingMode: sandboxv1beta1.SandboxOperatingModeRunning,
+				},
+			},
+			wantPod: &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:            sandboxName,
+					Namespace:       sandboxNs,
+					ResourceVersion: "2",
+					Labels: map[string]string{
+						"agents.x-k8s.io/sandbox-name-hash": nameHash,
+						"custom-label":                      "label-val",
+					},
+					Annotations: map[string]string{
+						"agents.x-k8s.io/propagated-labels": "custom-label",
+					},
+					OwnerReferences: []metav1.OwnerReference{sandboxControllerRef(sandboxName)},
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{Name: "test-container"}},
+				},
+			},
+			wantSandboxAnnotations: map[string]string{
+				sandboxv1beta1.SandboxPodNameAnnotation: sandboxName,
+			},
+		},
+		{
+			name: "removes template-ref-hash label from Pod when absent from Sandbox labels but still extensions-owned",
+			initialObjs: []runtime.Object{
+				&corev1.Pod{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:            sandboxName,
+						Namespace:       sandboxNs,
+						ResourceVersion: "1",
+						Labels: map[string]string{
+							"agents.x-k8s.io/sandbox-name-hash":        nameHash,
+							"custom-label":                             "label-val",
+							sandboxv1beta1.SandboxTemplateRefHashLabel: "da1fd924",
+						},
+						Annotations: map[string]string{
+							"agents.x-k8s.io/propagated-labels": "custom-label",
+						},
+					},
+					Spec: corev1.PodSpec{
+						Containers: []corev1.Container{{Name: "test-container"}},
+					},
+				},
+			},
+			sandbox: &sandboxv1beta1.Sandbox{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      sandboxName,
+					Namespace: sandboxNs,
+					UID:       sandboxUID,
+					OwnerReferences: []metav1.OwnerReference{
+						{
+							APIVersion: "extensions.agents.x-k8s.io/v1beta1",
+							Kind:       "SandboxClaim",
+							Name:       "my-claim",
+							UID:        "claim-uid",
+							Controller: new(true),
+						},
+					},
 				},
 				Spec: sandboxv1beta1.SandboxSpec{SandboxBlueprint: sandboxv1beta1.SandboxBlueprint{PodTemplate: sandboxv1beta1.PodTemplate{
 					Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "test-container"}}},
@@ -3732,4 +3799,63 @@ func TestReconcile_TracingNormalization(t *testing.T) {
 
 	require.NotNil(t, mt.capturedAttrs)
 	require.Equal(t, "unknown", mt.capturedAttrs[sandboxv1beta1.CreatedByLabel], "created-by label must be normalized in span attributes")
+}
+
+func TestNameHash_Correctness(t *testing.T) {
+	// Verify the fast hex encoding produces the same output as the
+	// reference implementation (fmt.Sprintf("%08x", ...)).
+	cases := []string{
+		"",
+		"a",
+		"my-sandbox",
+		"test-template-custom",
+		"pool",
+		"sandbox-name-with-a-very-long-label-value",
+	}
+
+	// Supplement with 100 randomized DNS-label-shaped strings so bit
+	// manipulation is exercised across a broader input distribution.
+	// Seeded for reproducibility.
+	rng := rand.New(rand.NewPCG(42, 0))
+	const dnsLabelChars = "abcdefghijklmnopqrstuvwxyz0123456789-"
+	for range 100 {
+		n := rng.IntN(63) + 1 // length in [1, 63]
+		var buf [63]byte
+		for i := range n {
+			buf[i] = dnsLabelChars[rng.IntN(len(dnsLabelChars))]
+		}
+		cases = append(cases, string(buf[:n]))
+	}
+
+	for _, name := range cases {
+		got := NameHash(name)
+		if len(got) != 8 {
+			t.Errorf("NameHash(%q) length = %d, want 8", name, len(got))
+		}
+		// Verify all chars are lowercase hex digits.
+		for i, c := range got {
+			if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+				t.Errorf("NameHash(%q)[%d] = %c, want hex digit", name, i, c)
+			}
+		}
+		// Cross-check against GetNumericHash.
+		want := fmt.Sprintf("%08x", GetNumericHash(name))
+		if got != want {
+			t.Errorf("NameHash(%q) = %q, want %q", name, got, want)
+		}
+	}
+}
+
+func BenchmarkNameHashNew(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = NameHash("my-sandbox-name")
+	}
+}
+
+func BenchmarkNameHashOld(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = fmt.Sprintf("%08x", GetNumericHash("my-sandbox-name"))
+	}
 }
