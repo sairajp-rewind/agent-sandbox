@@ -16,6 +16,7 @@
 
 import asyncio
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -590,8 +591,13 @@ def _apply_openclaw_manifests(request):
 
     def _claim_ready():
         try:
-            get_openclaw_pod_name()
-            return True
+            pod_name = get_openclaw_pod_name()
+            res = subprocess.run(
+                ["kubectl", "get", "pod", pod_name,
+                 "-o", "jsonpath={.status.conditions[?(@.type=='Ready')].status}"],
+                text=True, capture_output=True, timeout=10,
+            )
+            return res.returncode == 0 and res.stdout.strip() == "True"
         except Exception:
             return False
 

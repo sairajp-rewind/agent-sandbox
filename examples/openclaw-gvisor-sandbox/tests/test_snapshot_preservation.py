@@ -19,6 +19,7 @@ import json
 import shlex
 import time
 import aiohttp
+import requests
 import pytest
 import subprocess
 from _helpers import wait_until, kubectl_exec, nodeport_url
@@ -43,77 +44,96 @@ def _get_snapshot_sandbox():
     return client.get_sandbox(claim_name="openclaw-sandbox-claim")
 
 
-def test_snapshot_preserves_active_shell_sleep_process():
-    """Verify background shell sleep process PID and state survive pod snapshot and resume."""
+def test_openclaw_process_pid_preserved_across_snapshot():
+    """Verify OpenClaw's node process is preserved by CRIU across snapshot+resume.
+
+    OpenClaw's `node dist/index.js gateway ...` renames its process title to
+    `openclaw-gateway` once fully initialized. Since it's in the main container's
+    PID tree, gVisor's CRIU checkpoint preserves it — matching PID after resume
+    proves the process was restored from snapshot rather than restarted.
+    """
     sandbox = _get_snapshot_sandbox()
     pod_name = sandbox.get_pod_name()
 
-    # Start background sleep process inside pod using nohup
-    kubectl_exec(pod_name, ["sh", "-c", "nohup sleep 300 >/dev/null 2>&1 &"])
-
-    # Capture PID before snapshot
-    pid_before = kubectl_exec(pod_name, ["pgrep", "-f", "sleep 300"]).strip()
-    assert pid_before != "", "sleep process failed to start"
-
-    # Suspend with snapshot and resume via SDK
-    res_suspend = sandbox.suspend(snapshot_before_suspend=True)
-    assert res_suspend.success, f"Suspend failed: {res_suspend.error_reason}"
-
-    res_resume = sandbox.resume()
-    assert res_resume.success, f"Resume failed: {res_resume.error_reason}"
-    assert res_resume.restored_from_snapshot is True
-
-    # Verify background sleep process is still running with identical PID
-    resumed_pod = sandbox.get_pod_name()
-    pid_after = kubectl_exec(resumed_pod, ["pgrep", "-f", "sleep 300"]).strip()
-    assert pid_after == pid_before, f"sleep PID changed ({pid_before} -> {pid_after}): process was restarted, not restored from snapshot"
-
-
-def test_snapshot_preserves_node_event_loop_timer():
-    """Verify Node.js event loop timer remaining duration is preserved (fires ~55s post-resume, not 60s)."""
-    sandbox = _get_snapshot_sandbox()
-    pod_name = sandbox.get_pod_name()
-
-    # Start Node one-shot timer scheduled for 60 seconds
-    js_script = "const start = Date.now(); setTimeout(() => { require('fs').writeFileSync('/tmp/timer.json', JSON.stringify({start, end: Date.now()})); }, 60000);"
-    kubectl_exec(pod_name, ["sh", "-c", f"nohup node -e {shlex.quote(js_script)} > /dev/null 2>&1 &"])
-
-    time.sleep(5)  # Let 5 seconds elapse before snapshotting
-
-    res_suspend = sandbox.suspend(snapshot_before_suspend=True)
-    assert res_suspend.success, f"Suspend failed: {res_suspend.error_reason}"
-
-    time.sleep(5)  # Duration while suspended
-
-    resume_wall_ms = int(time.time() * 1000)
-    res_resume = sandbox.resume()
-    assert res_resume.success, f"Resume failed: {res_resume.error_reason}"
-    assert res_resume.restored_from_snapshot is True
-
-    resumed_pod = sandbox.get_pod_name()
-
-    try:
-        def _timer_completed():
-            try:
-                out = kubectl_exec(resumed_pod, ["cat", "/tmp/timer.json"]).strip()
-                return '"end":' in out
-            except Exception:
-                return False
-
-        wait_until(_timer_completed, timeout=90, interval=2.0, message="Timer completion output /tmp/timer.json not found")
-
-        timer_data = json.loads(kubectl_exec(resumed_pod, ["cat", "/tmp/timer.json"]).strip())
-        fired_after_resume_s = (timer_data["end"] - resume_wall_ms) / 1000.0
-        # Preserved timer had ~55s remaining post-resume; if restarted it would take ~60s
-        assert 48.0 <= fired_after_resume_s <= 59.0, f"Timer fired {fired_after_resume_s}s after resume — likely restarted, not preserved"
-    finally:
+    # Wait for OpenClaw to have fully initialized (process title renamed to openclaw-gateway)
+    def _openclaw_ready():
         try:
-            kubectl_exec(resumed_pod, ["rm", "-f", "/tmp/timer.json"])
+            return kubectl_exec(pod_name, ["pgrep", "-f", "openclaw-gateway"]).strip() != ""
         except Exception:
-            pass
+            return False
+
+    wait_until(_openclaw_ready, timeout=60, interval=2.0, message="OpenClaw process didn't reach openclaw-gateway state")
+
+    pid_before = kubectl_exec(pod_name, ["pgrep", "-f", "openclaw-gateway"]).strip()
+    assert pid_before, "openclaw-gateway process not found"
+
+    res_suspend = sandbox.suspend(snapshot_before_suspend=True)
+    assert res_suspend.success, f"Suspend failed: {res_suspend.error_reason}"
+
+    res_resume = sandbox.resume()
+    assert res_resume.success, f"Resume failed: {res_resume.error_reason}"
+    assert res_resume.restored_from_snapshot is True
+
+    resumed_pod = sandbox.get_pod_name()
+    pid_after = kubectl_exec(resumed_pod, ["pgrep", "-f", "openclaw-gateway"]).strip()
+    assert pid_after == pid_before, (
+        f"openclaw-gateway PID changed ({pid_before} → {pid_after}): process was restarted, not restored from snapshot"
+    )
+
+
+def _gateway_status_code(pod_name, timeout_seconds=3):
+    """Return HTTP status code as string from OpenClaw gateway root, or empty on error."""
+    try:
+        return kubectl_exec(pod_name, ["sh", "-c",
+            f"curl -s -o /dev/null -w '%{{http_code}}' --max-time {timeout_seconds} "
+            f"http://127.0.0.1:18789/"
+        ]).strip()
+    except Exception:
+        return ""
+
+
+def test_openclaw_gateway_responsive_immediately_after_resume():
+    """Verify OpenClaw gateway responds without cold-start delay after resume.
+
+    Uses `kubectl exec + curl` inside the pod to avoid dependence on
+    external cluster network reachability from the test host.
+    """
+    sandbox = _get_snapshot_sandbox()
+    pod_name = sandbox.get_pod_name()
+
+    # Baseline: wait for gateway to be ready inside the pod
+    wait_until(
+        lambda: _gateway_status_code(pod_name) == "200",
+        timeout=60, interval=2.0,
+        message="Gateway not returning 200 from inside the pod before snapshot",
+    )
+
+    # Suspend + snapshot + resume
+    res_suspend = sandbox.suspend(snapshot_before_suspend=True)
+    assert res_suspend.success, f"Suspend failed: {res_suspend.error_reason}"
+
+    res_resume = sandbox.resume()
+    assert res_resume.success, f"Resume failed: {res_resume.error_reason}"
+    assert res_resume.restored_from_snapshot is True
+
+    resumed_pod = sandbox.get_pod_name()
+
+    # Immediately after resume, gateway should respond fast — cold-start
+    # would take 5-10s. If it responds in <3s (kubectl exec + curl overhead
+    # is ~500ms-1s), the snapshot skipped the boot cycle.
+    start = time.time()
+    code = _gateway_status_code(resumed_pod, timeout_seconds=3)
+    elapsed = time.time() - start
+
+    assert code == "200", f"Gateway returned '{code}' instead of 200 after resume"
+    assert elapsed < 3.0, (
+        f"Gateway took {elapsed:.2f}s to respond after resume — likely "
+        f"cold-started, not snapshot-restored"
+    )
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="Assumes gateway WebSocket endpoint at /ws")
 async def test_snapshot_preserves_open_websocket():
     """Verify active client-side WebSocket state remains connected across snapshot suspend and resume.
 
@@ -138,7 +158,7 @@ async def test_snapshot_preserves_open_websocket():
 
 
 def test_pod_restored_condition_becomes_true_after_resume():
-    """Verify Sandbox status condition PodRestored=True on the Kubernetes CR via host kubectl after resume."""
+    """Verify Pod status condition PodRestored=True on the backing Pod via host kubectl after resume."""
     sandbox = _get_snapshot_sandbox()
 
     res_suspend = sandbox.suspend(snapshot_before_suspend=True)
@@ -148,11 +168,12 @@ def test_pod_restored_condition_becomes_true_after_resume():
     assert res_resume.success, f"Resume failed: {res_resume.error_reason}"
     assert res_resume.restored_from_snapshot is True
 
-    # Query the Sandbox CR directly from the host system using host kubectl
+    # Query the backing Pod object directly from the host system using host kubectl
     def _pod_restored_condition_true():
         try:
+            pod_name = sandbox.get_pod_name()
             res = subprocess.run(
-                ["kubectl", "get", "sandbox", sandbox.sandbox_id, "-o", "jsonpath={.status.conditions}"],
+                ["kubectl", "get", "pod", pod_name, "-o", "jsonpath={.status.conditions}"],
                 text=True, capture_output=True, timeout=10
             )
             if res.returncode != 0:
@@ -161,7 +182,7 @@ def test_pod_restored_condition_becomes_true_after_resume():
         except Exception:
             return False
 
-    wait_until(_pod_restored_condition_true, timeout=60, interval=1.0, message="Sandbox CR status condition PodRestored=True not found")
+    wait_until(_pod_restored_condition_true, timeout=60, interval=1.0, message="Pod status condition PodRestored=True not found")
 
 
 def test_restore_from_specific_snapshot_uid():

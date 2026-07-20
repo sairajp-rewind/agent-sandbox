@@ -99,7 +99,12 @@ def test_wake_on_traffic_buffers_and_replays_ws_handshake(fake_router):
 # ==============================================================================
 
 @pytest.mark.live
-@pytest.mark.skip(reason="TODO: deploy real sandbox-router/ + FakeLifecycleDaemon(k8s_client=...) live mode (plan.md § 4.4 Group 6)")
+@pytest.mark.skip(reason=(
+      "Blocked on wake-on-traffic protocol. Current "
+      "sandbox-router/ does passive dial-retry only, not buffer + wake-"
+      "trigger. Un-skip when Lifecycle Daemon lands and defines the "
+      "router↔daemon contract."
+  ))
 def test_wake_on_traffic_via_real_sandbox_router():
     """Verify real sandbox-router buffers WS traffic to a suspended pod and triggers resume via daemon stand-in."""
     pass
