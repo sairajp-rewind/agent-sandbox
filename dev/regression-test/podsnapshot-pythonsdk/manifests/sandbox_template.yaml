@@ -1,0 +1,29 @@
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxTemplate
+metadata:
+  name: python-counter-template
+  namespace: ${NS}
+spec:
+  volumeClaimTemplatesPolicy: Allowed
+  podTemplate:
+    metadata:
+      labels:
+        app: agent-sandbox-workload
+        sandbox: sdk-test-sandbox
+    spec:
+      serviceAccountName: sandbox-sa
+      runtimeClassName: gvisor
+      containers:
+      - name: python-sandbox
+        image: python:3.10-slim
+        command: ["python3", "-c"]
+        args:
+          - |
+            import time
+            i = 0
+            while True:
+                print(f"Count: {i}", flush=True)
+                i += 1
+                time.sleep(1)
+        ports:
+        - containerPort: 8888

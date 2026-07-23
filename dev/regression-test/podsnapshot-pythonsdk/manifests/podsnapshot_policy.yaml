@@ -1,0 +1,18 @@
+apiVersion: podsnapshot.gke.io/v1
+kind: PodSnapshotPolicy
+metadata:
+  name: psp-${NS}
+  namespace: ${NS}
+spec:
+  storageConfigName: pssc-gcs-${NS}
+  selector:
+    matchLabels:
+      app: agent-sandbox-workload
+  triggerConfig:
+    type: manual
+    postCheckpoint: resume
+  snapshotGroupingRules:
+    groupByLabelValue:
+      labels: ["agents.x-k8s.io/sandbox-name-hash"]
+      groupRetentionPolicy:
+        maxSnapshotCountPerGroup: 5

@@ -1,0 +1,10 @@
+apiVersion: podsnapshot.gke.io/v1
+kind: PodSnapshotStorageConfig
+metadata:
+  name: pssc-gcs-${NS}
+  namespace: ${NS}
+spec:
+  snapshotStorageConfig:
+    gcs:
+      bucket: "${BUCKET_SHORT}"
+      tokenSource: podKSA
