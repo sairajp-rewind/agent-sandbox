@@ -1,1 +1,17 @@
+<!--
+ Copyright 2026 The Kubernetes Authors.
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+     http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-->
+
 <?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="0" skipped="0" tests="2" time="94.225" timestamp="2026-07-23T18:23:33.935241+00:00" hostname="sairajcloudtop.c.googlers.com"><testcase classname="dev.regression-test.podsnapshot-pythonsdk.test_multi_user_lifecycle.TestMultiUserLifecycle" name="test_multi_user_concurrent_lifecycle_and_isolation" time="52.407" /><testcase classname="dev.regression-test.podsnapshot-pythonsdk.test_single_user_lifecycle.TestSingleUserLifecycle" name="test_single_user_full_lifecycle" time="41.772" /></testsuite></testsuites>
