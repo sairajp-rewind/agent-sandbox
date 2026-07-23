@@ -39,6 +39,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	sandboxv1beta1 "sigs.k8s.io/agent-sandbox/api/v1beta1"
+	extensionsv1beta1 "sigs.k8s.io/agent-sandbox/extensions/api/v1beta1"
 	asmetrics "sigs.k8s.io/agent-sandbox/internal/metrics"
 )
 
@@ -55,8 +56,8 @@ const sandboxUID = types.UID("test-sandbox-uid")
 
 func sandboxControllerRef(name string) metav1.OwnerReference {
 	return metav1.OwnerReference{
-		APIVersion:         "agents.x-k8s.io/v1beta1",
-		Kind:               "Sandbox",
+		APIVersion:         sandboxv1beta1.GroupVersion.String(),
+		Kind:               sandboxv1beta1.SandboxKind,
 		Name:               name,
 		UID:                sandboxUID,
 		Controller:         new(true),
@@ -1516,8 +1517,8 @@ func TestReconcilePod(t *testing.T) {
 					},
 					OwnerReferences: []metav1.OwnerReference{
 						{
-							APIVersion: "extensions.agents.x-k8s.io/v1beta1",
-							Kind:       "SandboxWarmPool",
+							APIVersion: extensionsv1beta1.GroupVersion.String(),
+							Kind:       extensionsv1beta1.SandboxWarmPoolKind,
 							Name:       "my-warm-pool",
 							UID:        "pool-uid",
 							Controller: new(true),
@@ -1639,8 +1640,8 @@ func TestReconcilePod(t *testing.T) {
 					},
 					OwnerReferences: []metav1.OwnerReference{
 						{
-							APIVersion: "extensions.agents.x-k8s.io/v1beta1",
-							Kind:       "SandboxWarmPool",
+							APIVersion: extensionsv1beta1.GroupVersion.String(),
+							Kind:       extensionsv1beta1.SandboxWarmPoolKind,
 							Name:       "my-warm-pool",
 							UID:        "pool-uid",
 							Controller: new(true),
@@ -1689,8 +1690,8 @@ func TestReconcilePod(t *testing.T) {
 					},
 					OwnerReferences: []metav1.OwnerReference{
 						{
-							APIVersion: "extensions.agents.x-k8s.io/v1beta1",
-							Kind:       "SandboxClaim",
+							APIVersion: extensionsv1beta1.GroupVersion.String(),
+							Kind:       extensionsv1beta1.SandboxClaimKind,
 							Name:       "my-claim",
 							UID:        "claim-uid",
 							Controller: new(true),
@@ -1753,8 +1754,8 @@ func TestReconcilePod(t *testing.T) {
 					},
 					OwnerReferences: []metav1.OwnerReference{
 						{
-							APIVersion: "extensions.agents.x-k8s.io/v1beta1",
-							Kind:       "SandboxClaim",
+							APIVersion: extensionsv1beta1.GroupVersion.String(),
+							Kind:       extensionsv1beta1.SandboxClaimKind,
 							Name:       "my-claim",
 							UID:        "claim-uid",
 							Controller: new(true),
@@ -1799,8 +1800,8 @@ func TestReconcilePod(t *testing.T) {
 					},
 					OwnerReferences: []metav1.OwnerReference{
 						{
-							APIVersion: "extensions.agents.x-k8s.io/v1beta1",
-							Kind:       "SandboxWarmPool",
+							APIVersion: extensionsv1beta1.GroupVersion.String(),
+							Kind:       extensionsv1beta1.SandboxWarmPoolKind,
 							Name:       "my-warm-pool",
 							UID:        "pool-uid",
 							Controller: new(true),
@@ -1918,8 +1919,8 @@ func TestReconcilePod(t *testing.T) {
 					UID:       sandboxUID,
 					OwnerReferences: []metav1.OwnerReference{
 						{
-							APIVersion: "extensions.agents.x-k8s.io/v1beta1",
-							Kind:       "SandboxClaim",
+							APIVersion: extensionsv1beta1.GroupVersion.String(),
+							Kind:       extensionsv1beta1.SandboxClaimKind,
 							Name:       "my-claim",
 							UID:        "claim-uid",
 							Controller: new(true),
@@ -3127,8 +3128,8 @@ func TestCheckOwnership(t *testing.T) {
 	}
 
 	sandboxOwnerRef := metav1.OwnerReference{
-		APIVersion:         "agents.x-k8s.io/v1beta1",
-		Kind:               "Sandbox",
+		APIVersion:         sandboxv1beta1.GroupVersion.String(),
+		Kind:               sandboxv1beta1.SandboxKind,
 		Name:               sandboxName,
 		UID:                sandboxUID,
 		Controller:         new(true),
@@ -3266,8 +3267,8 @@ func TestReconcilePVCs(t *testing.T) {
 						Namespace: sandboxNs,
 						OwnerReferences: []metav1.OwnerReference{
 							{
-								APIVersion:         "agents.x-k8s.io/v1beta1",
-								Kind:               "Sandbox",
+								APIVersion:         sandboxv1beta1.GroupVersion.String(),
+								Kind:               sandboxv1beta1.SandboxKind,
 								Name:               sandboxName,
 								UID:                sandboxUID,
 								Controller:         new(true),
@@ -3858,4 +3859,92 @@ func BenchmarkNameHashOld(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		_ = fmt.Sprintf("%08x", GetNumericHash("my-sandbox-name"))
 	}
+}
+
+// TestReconcileCoalescesNodeNameStatusWrite verifies that a status change
+// consisting only of the scheduled pod's node name is not written in its own
+// API request: the node name rides along with the next status write instead,
+// normally the Ready transition.
+func TestReconcileCoalescesNodeNameStatusWrite(t *testing.T) {
+	sandboxName := "sandbox-name"
+	sandboxNs := "sandbox-ns"
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: sandboxName, Namespace: sandboxNs}}
+
+	sb := &sandboxv1beta1.Sandbox{}
+	sb.Name = sandboxName
+	sb.Namespace = sandboxNs
+	sb.UID = sandboxUID
+	sb.Generation = 1
+	sb.Spec = sandboxv1beta1.SandboxSpec{SandboxBlueprint: sandboxv1beta1.SandboxBlueprint{
+		PodTemplate: sandboxv1beta1.PodTemplate{
+			Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "test-container"}}},
+		},
+	}}
+	r := &SandboxReconciler{
+		Client:        newFakeClient(sb),
+		Scheme:        Scheme,
+		Tracer:        asmetrics.NewNoOp(),
+		ClusterDomain: "cluster.local",
+	}
+
+	// Initial reconcile: creates the pod and writes the initial status.
+	_, err := r.Reconcile(t.Context(), req)
+	require.NoError(t, err)
+	beforeBind := &sandboxv1beta1.Sandbox{}
+	require.NoError(t, r.Get(t.Context(), req.NamespacedName, beforeBind))
+	require.Empty(t, beforeBind.Status.NodeName)
+
+	// The pod reports Pending (its state from creation until it runs) and
+	// the sandbox status reflects that.
+	pod := &corev1.Pod{}
+	require.NoError(t, r.Get(t.Context(), req.NamespacedName, pod))
+	pod.Status.Phase = corev1.PodPending
+	require.NoError(t, r.Status().Update(t.Context(), pod))
+	_, err = r.Reconcile(t.Context(), req)
+	require.NoError(t, err)
+	beforeBind = &sandboxv1beta1.Sandbox{}
+	require.NoError(t, r.Get(t.Context(), req.NamespacedName, beforeBind))
+
+	// Scheduler binds the pod; nothing else about the sandbox changes, so no
+	// status write should happen.
+	require.NoError(t, r.Get(t.Context(), req.NamespacedName, pod))
+	pod.Spec.NodeName = "node-1"
+	require.NoError(t, r.Update(t.Context(), pod))
+
+	_, err = r.Reconcile(t.Context(), req)
+	require.NoError(t, err)
+	live := &sandboxv1beta1.Sandbox{}
+	require.NoError(t, r.Get(t.Context(), req.NamespacedName, live))
+	assert.Empty(t, live.Status.NodeName, "node-name-only change should not be written on its own")
+	assert.Equal(t, beforeBind.ResourceVersion, live.ResourceVersion, "no status write expected for a node-name-only change")
+
+	// Pod becomes Ready: a single status write carries the node name, the
+	// pod IPs and the Ready condition together.
+	require.NoError(t, r.Get(t.Context(), req.NamespacedName, pod))
+	pod.Status.Phase = corev1.PodRunning
+	pod.Status.PodIPs = []corev1.PodIP{{IP: "10.0.0.8"}}
+	pod.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}
+	require.NoError(t, r.Status().Update(t.Context(), pod))
+
+	_, err = r.Reconcile(t.Context(), req)
+	require.NoError(t, err)
+	require.NoError(t, r.Get(t.Context(), req.NamespacedName, live))
+	assert.Equal(t, "node-1", live.Status.NodeName)
+	assert.Equal(t, []string{"10.0.0.8"}, live.Status.PodIPs)
+	readyCondition := meta.FindStatusCondition(live.Status.Conditions, string(sandboxv1beta1.SandboxConditionReady))
+	require.NotNil(t, readyCondition)
+	assert.Equal(t, metav1.ConditionTrue, readyCondition.Status)
+
+	// Once the sandbox is Ready the deferral no longer applies: a node
+	// change with no condition change (impossible in practice, but cheap to
+	// guard) is written through rather than leaving a Ready sandbox with a
+	// stale node name.
+	require.NoError(t, r.Get(t.Context(), req.NamespacedName, pod))
+	pod.Spec.NodeName = "node-2"
+	require.NoError(t, r.Update(t.Context(), pod))
+
+	_, err = r.Reconcile(t.Context(), req)
+	require.NoError(t, err)
+	require.NoError(t, r.Get(t.Context(), req.NamespacedName, live))
+	assert.Equal(t, "node-2", live.Status.NodeName, "node changes on a Ready sandbox must be written immediately")
 }
